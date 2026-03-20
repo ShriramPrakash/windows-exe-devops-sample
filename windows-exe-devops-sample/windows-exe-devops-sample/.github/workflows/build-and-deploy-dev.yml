@@ -1,0 +1,96 @@
+name: Build and Deploy Dev
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - 'scripts/**'
+
+jobs:
+  build-exe:
+    runs-on: windows-latest
+    outputs:
+      exe_name: ${{ steps.capture.outputs.exe_name }}
+      version: ${{ steps.version.outputs.version }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Read version
+        id: version
+        shell: powershell
+        run: |
+          $version = Get-Content app/windows-agent/packaging/version.txt
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Install Inno Setup
+        shell: powershell
+        run: |
+          choco install innosetup -y
+
+      - name: Build EXE installer
+        shell: powershell
+        run: |
+          cd app/windows-agent/packaging
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
+
+      - name: Capture EXE file name
+        id: capture
+        shell: powershell
+        run: |
+          $file = Get-ChildItem app/windows-agent/packaging/output/*.exe | Select-Object -First 1
+          "exe_name=$($file.Name)" >> $env:GITHUB_OUTPUT
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ap-south-1
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Upload EXE and scripts to Dev S3
+        shell: powershell
+        run: |
+          $file = Get-ChildItem app/windows-agent/packaging/output/*.exe | Select-Object -First 1
+          aws s3 cp $file.FullName s3://${{ secrets.DEV_BUCKET }}/dev/windows-agent/$($file.Name)
+          aws s3 cp scripts/windows/install_exe.ps1 s3://${{ secrets.DEV_BUCKET }}/dev/windows-agent/install_exe.ps1
+          aws s3 cp scripts/windows/smoke_test.ps1 s3://${{ secrets.DEV_BUCKET }}/dev/windows-agent/smoke_test.ps1
+
+  deploy-dev:
+    runs-on: ubuntu-latest
+    needs: build-exe
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ap-south-1
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Fetch Dev Windows instance ID by tag
+        id: dev_instance
+        run: |
+          INSTANCE_ID=$(aws ec2 describe-instances \
+            --filters "Name=tag:Name,Values=windows-exe-sample-dev-windows" "Name=instance-state-name,Values=running" \
+            --query "Reservations[*].Instances[*].InstanceId" \
+            --output text)
+
+          echo "instance_id=$INSTANCE_ID" >> $GITHUB_OUTPUT
+          echo "Dev instance ID: $INSTANCE_ID"
+
+      - name: Deploy to Dev Windows EC2 via SSM
+        run: |
+          aws ssm send-command \
+            --instance-ids "${{ steps.dev_instance.outputs.instance_id }}" \
+            --document-name "AWS-RunPowerShellScript" \
+            --parameters 'commands=[
+              "New-Item -ItemType Directory -Path C:\temp\myagent -Force",
+              "aws s3 cp s3://${{ secrets.DEV_BUCKET }}/dev/windows-agent/${{ needs.build-exe.outputs.exe_name }} C:\temp\myagent\${{ needs.build-exe.outputs.exe_name }}",
+              "aws s3 cp s3://${{ secrets.DEV_BUCKET }}/dev/windows-agent/install_exe.ps1 C:\temp\myagent\install_exe.ps1",
+              "aws s3 cp s3://${{ secrets.DEV_BUCKET }}/dev/windows-agent/smoke_test.ps1 C:\temp\myagent\smoke_test.ps1",
+              "powershell -ExecutionPolicy Bypass -File C:\temp\myagent\install_exe.ps1 -InstallerPath C:\temp\myagent\${{ needs.build-exe.outputs.exe_name }}",
+              "powershell -ExecutionPolicy Bypass -File C:\temp\myagent\smoke_test.ps1"
+            ]'
