@@ -1,5 +1,5 @@
 # Windows EXE DevOps Sample with Separate Terraform Environments
-Hi This is Shriram Prakash P R . I am a DevOps Engineer
+Hi This is Shriram Prakash P R . I am a DevOps Engineer. I am a CG50
 This sample project shows a simple but industry-style DevOps setup for a Windows EXE application using:
 
 - GitHub and GitHub Actions
