@@ -59,6 +59,7 @@ jobs:
           aws s3 cp scripts/windows/install_exe.ps1 s3://${{ secrets.DEV_BUCKET }}/dev/windows-agent/install_exe.ps1
           aws s3 cp scripts/windows/smoke_test.ps1 s3://${{ secrets.DEV_BUCKET }}/dev/windows-agent/smoke_test.ps1
 
+    
   deploy-dev:
     runs-on: ubuntu-latest
     needs: build-exe
@@ -67,24 +68,45 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-region: ap-south-1
+          aws-region: ap-southeast-1
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Print AWS identity
+        run: |
+          aws sts get-caller-identity
+          aws configure list
+
+      - name: List running instances visible to workflow
+        run: |
+          aws ec2 describe-instances \
+            --region ap-southeast-1 \
+            --filters "Name=instance-state-name,Values=running" \
+            --query "Reservations[*].Instances[*].[InstanceId,Tags[?Key=='Name']|[0].Value]" \
+            --output table
 
       - name: Fetch Dev Windows instance ID by tag
         id: dev_instance
         run: |
           INSTANCE_ID=$(aws ec2 describe-instances \
+            --region ap-southeast-1 \
             --filters "Name=tag:Name,Values=windows-exe-sample-dev-windows" "Name=instance-state-name,Values=running" \
             --query "Reservations[*].Instances[*].InstanceId" \
             --output text)
 
+          echo "Matched instance: $INSTANCE_ID"
+
+          if [ -z "$INSTANCE_ID" ] || [ "$INSTANCE_ID" = "None" ]; then
+            echo "No running Dev instance found with tag Name=windows-exe-sample-dev-windows"
+            exit 1
+          fi
+
           echo "instance_id=$INSTANCE_ID" >> $GITHUB_OUTPUT
-          echo "Dev instance ID: $INSTANCE_ID"
 
       - name: Deploy to Dev Windows EC2 via SSM
         run: |
           aws ssm send-command \
+            --region ap-southeast-1 \
             --instance-ids "${{ steps.dev_instance.outputs.instance_id }}" \
             --document-name "AWS-RunPowerShellScript" \
             --parameters 'commands=[
