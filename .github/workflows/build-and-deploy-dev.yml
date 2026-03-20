@@ -6,6 +6,7 @@ on:
     paths:
       - 'app/**'
       - 'scripts/**'
+  workflow_dispatch:
 
 jobs:
   build-exe:
