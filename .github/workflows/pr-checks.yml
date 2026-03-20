@@ -17,6 +17,25 @@ jobs:
         run: |
           .\app\windows-agent\tests\validate.ps1
 
+  powershell-lint:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install PSScriptAnalyzer
+        shell: powershell
+        run: |
+          Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser
+
+      - name: Run PSScriptAnalyzer
+        shell: powershell
+        run: |
+          $results = Invoke-ScriptAnalyzer -Path app, scripts -Recurse
+          $results | Format-Table
+          if ($results) { exit 1 }
+
   terraform-validate:
     runs-on: ubuntu-latest
 
@@ -53,3 +72,16 @@ jobs:
       - name: Terraform Validate Prod
         working-directory: terraform/environments/prod
         run: terraform validate
+
+  checkov:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Checkov
+        run: pip install checkov
+
+      - name: Run Checkov scan
+        run: checkov -d terraform
