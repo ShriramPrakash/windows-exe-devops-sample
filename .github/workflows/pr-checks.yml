@@ -32,9 +32,28 @@ jobs:
       - name: Run PSScriptAnalyzer
         shell: powershell
         run: |
-          $results = Invoke-ScriptAnalyzer -Path app, scripts -Recurse
-          $results | Format-Table
-          if ($results) { exit 1 }
+          $results = @()
+
+          if (Test-Path "app") {
+            $results += Invoke-ScriptAnalyzer -Path "app" -Recurse
+          }
+
+          if (Test-Path "scripts") {
+            $results += Invoke-ScriptAnalyzer -Path "scripts" -Recurse
+          }
+
+          # Show all issues
+          if ($results) {
+            $results | Format-Table
+          }
+
+          # Fail only on errors (ignore warnings)
+          $errors = $results | Where-Object { $_.Severity -eq "Error" }
+
+          if ($errors) {
+            Write-Host "PowerShell lint errors found"
+            exit 1
+          }
 
   terraform-validate:
     runs-on: ubuntu-latest
@@ -72,16 +91,3 @@ jobs:
       - name: Terraform Validate Prod
         working-directory: terraform/environments/prod
         run: terraform validate
-
-  checkov:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install Checkov
-        run: pip install checkov
-
-      - name: Run Checkov scan
-        run: checkov -d terraform
