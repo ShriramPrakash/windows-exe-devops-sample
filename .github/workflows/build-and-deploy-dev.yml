@@ -7,6 +7,8 @@ on:
       - 'app/**'
       - 'scripts/**'
 
+  workflow_dispatch:
+    
 jobs:
   build-exe:
     runs-on: windows-latest
