@@ -1,0 +1,56 @@
+name: Promote to QA
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to promote, for example 1.0.0"
+        required: true
+
+jobs:
+  promote-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ap-south-1
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Promote same artifact from Dev S3 to Release S3
+        run: |
+          aws s3 cp s3://${{ secrets.DEV_BUCKET }}/dev/windows-agent/MyAgentSetup-${{ github.event.inputs.version }}.exe \
+                   s3://${{ secrets.RELEASE_BUCKET }}/releases/${{ github.event.inputs.version }}/windows-agent/MyAgentSetup-${{ github.event.inputs.version }}.exe
+
+          aws s3 cp s3://${{ secrets.DEV_BUCKET }}/dev/windows-agent/install_exe.ps1 \
+                   s3://${{ secrets.RELEASE_BUCKET }}/releases/${{ github.event.inputs.version }}/windows-agent/install_exe.ps1
+
+          aws s3 cp s3://${{ secrets.DEV_BUCKET }}/dev/windows-agent/smoke_test.ps1 \
+                   s3://${{ secrets.RELEASE_BUCKET }}/releases/${{ github.event.inputs.version }}/windows-agent/smoke_test.ps1
+
+      - name: Fetch QA Windows instance ID by tag
+        id: qa_instance
+        run: |
+          INSTANCE_ID=$(aws ec2 describe-instances \
+            --filters "Name=tag:Name,Values=windows-exe-sample-qa-windows" "Name=instance-state-name,Values=running" \
+            --query "Reservations[*].Instances[*].InstanceId" \
+            --output text)
+
+          echo "instance_id=$INSTANCE_ID" >> $GITHUB_OUTPUT
+          echo "QA instance ID: $INSTANCE_ID"
+
+      - name: Deploy same artifact to QA Windows EC2
+        run: |
+          aws ssm send-command \
+            --instance-ids "${{ steps.qa_instance.outputs.instance_id }}" \
+            --document-name "AWS-RunPowerShellScript" \
+            --parameters 'commands=[
+              "New-Item -ItemType Directory -Path C:\temp\myagent -Force",
+              "aws s3 cp s3://${{ secrets.RELEASE_BUCKET }}/releases/${{ github.event.inputs.version }}/windows-agent/MyAgentSetup-${{ github.event.inputs.version }}.exe C:\temp\myagent\MyAgentSetup-${{ github.event.inputs.version }}.exe",
+              "aws s3 cp s3://${{ secrets.RELEASE_BUCKET }}/releases/${{ github.event.inputs.version }}/windows-agent/install_exe.ps1 C:\temp\myagent\install_exe.ps1",
+              "aws s3 cp s3://${{ secrets.RELEASE_BUCKET }}/releases/${{ github.event.inputs.version }}/windows-agent/smoke_test.ps1 C:\temp\myagent\smoke_test.ps1",
+              "powershell -ExecutionPolicy Bypass -File C:\temp\myagent\install_exe.ps1 -InstallerPath C:\temp\myagent\MyAgentSetup-${{ github.event.inputs.version }}.exe",
+              "powershell -ExecutionPolicy Bypass -File C:\temp\myagent\smoke_test.ps1"
+            ]'
