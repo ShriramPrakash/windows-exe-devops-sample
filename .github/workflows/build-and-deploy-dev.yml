@@ -6,7 +6,6 @@ on:
     paths:
       - 'app/**'
       - 'scripts/**'
-  workflow_dispatch:
 
 jobs:
   build-exe:
@@ -25,6 +24,14 @@ jobs:
         run: |
           $version = Get-Content app/windows-agent/packaging/version.txt
           "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Sync installer version from version.txt
+        shell: powershell
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          (Get-Content app/windows-agent/packaging/installer.iss) `
+            -replace '#define MyAppVersion ".*"', "#define MyAppVersion `"$version`"" |
+            Set-Content app/windows-agent/packaging/installer.iss
 
       - name: Install Inno Setup
         shell: powershell
@@ -59,7 +66,6 @@ jobs:
           aws s3 cp scripts/windows/install_exe.ps1 s3://${{ secrets.DEV_BUCKET }}/dev/windows-agent/install_exe.ps1
           aws s3 cp scripts/windows/smoke_test.ps1 s3://${{ secrets.DEV_BUCKET }}/dev/windows-agent/smoke_test.ps1
 
-    
   deploy-dev:
     runs-on: ubuntu-latest
     needs: build-exe
@@ -72,43 +78,15 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
-      - name: Print AWS identity
+      - name: Send SSM command to Dev
+        id: send_ssm
         run: |
-          aws sts get-caller-identity
-          aws configure list
-
-      - name: List running instances visible to workflow
-        run: |
-          aws ec2 describe-instances \
+          COMMAND_ID=$(aws ssm send-command \
             --region ap-southeast-1 \
-            --filters "Name=instance-state-name,Values=running" \
-            --query "Reservations[*].Instances[*].[InstanceId,Tags[?Key=='Name']|[0].Value]" \
-            --output table
-
-      - name: Fetch Dev Windows instance ID by tag
-        id: dev_instance
-        run: |
-          INSTANCE_ID=$(aws ec2 describe-instances \
-            --region ap-southeast-1 \
-            --filters "Name=tag:Name,Values=windows-exe-sample-dev-windows" "Name=instance-state-name,Values=running" \
-            --query "Reservations[*].Instances[*].InstanceId" \
-            --output text)
-
-          echo "Matched instance: $INSTANCE_ID"
-
-          if [ -z "$INSTANCE_ID" ] || [ "$INSTANCE_ID" = "None" ]; then
-            echo "No running Dev instance found with tag Name=windows-exe-sample-dev-windows"
-            exit 1
-          fi
-
-          echo "instance_id=$INSTANCE_ID" >> $GITHUB_OUTPUT
-
-      - name: Deploy to Dev Windows EC2 via SSM
-        run: |
-          aws ssm send-command \
-            --region ap-southeast-1 \
-            --instance-ids "${{ steps.dev_instance.outputs.instance_id }}" \
+            --targets "Key=tag:Name,Values=windows-exe-sample-dev-windows" \
             --document-name "AWS-RunPowerShellScript" \
+            --query "Command.CommandId" \
+            --output text \
             --parameters 'commands=[
               "New-Item -ItemType Directory -Path C:\temp\myagent -Force",
               "aws s3 cp s3://${{ secrets.DEV_BUCKET }}/dev/windows-agent/${{ needs.build-exe.outputs.exe_name }} C:\temp\myagent\${{ needs.build-exe.outputs.exe_name }}",
@@ -116,4 +94,39 @@ jobs:
               "aws s3 cp s3://${{ secrets.DEV_BUCKET }}/dev/windows-agent/smoke_test.ps1 C:\temp\myagent\smoke_test.ps1",
               "powershell -ExecutionPolicy Bypass -File C:\temp\myagent\install_exe.ps1 -InstallerPath C:\temp\myagent\${{ needs.build-exe.outputs.exe_name }}",
               "powershell -ExecutionPolicy Bypass -File C:\temp\myagent\smoke_test.ps1"
-            ]'
+            ]')
+
+          echo "command_id=$COMMAND_ID" >> $GITHUB_OUTPUT
+          echo "SSM Command ID: $COMMAND_ID"
+
+      - name: Wait for Dev SSM command result
+        run: |
+          echo "Waiting for SSM command to complete..."
+          sleep 20
+
+          INSTANCE_ID=$(aws ec2 describe-instances \
+            --region ap-southeast-1 \
+            --filters "Name=tag:Name,Values=windows-exe-sample-dev-windows" "Name=instance-state-name,Values=running" \
+            --query "Reservations[*].Instances[*].InstanceId" \
+            --output text)
+
+          STATUS=$(aws ssm get-command-invocation \
+            --region ap-southeast-1 \
+            --command-id "${{ steps.send_ssm.outputs.command_id }}" \
+            --instance-id "$INSTANCE_ID" \
+            --query "Status" \
+            --output text)
+
+          echo "SSM Status: $STATUS"
+
+          aws ssm get-command-invocation \
+            --region ap-southeast-1 \
+            --command-id "${{ steps.send_ssm.outputs.command_id }}" \
+            --instance-id "$INSTANCE_ID" \
+            --query "{Status:Status,StdOut:StandardOutputContent,StdErr:StandardErrorContent}" \
+            --output json
+
+          if [ "$STATUS" != "Success" ]; then
+            echo "Deployment failed on EC2"
+            exit 1
+          fi
