@@ -1,8 +1,8 @@
 terraform {
   backend "s3" {
-    bucket         = "mycompany-terraform-state"
+    bucket         = "shriram-terraform-state-001"
     key            = "windows-exe-sample/dev/terraform.tfstate"
-    region         = "ap-south-1"
+    region         = "ap-southeast-1"
     dynamodb_table = "terraform-locks"
   }
 }
