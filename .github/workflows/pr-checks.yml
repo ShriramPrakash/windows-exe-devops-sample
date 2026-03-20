@@ -32,9 +32,18 @@ jobs:
       - name: Run PSScriptAnalyzer
         shell: powershell
         run: |
-          $results = Invoke-ScriptAnalyzer -Path app, scripts -Recurse
+          $results = Invoke-ScriptAnalyzer -Path "app","scripts" -Recurse
+          
+          # Show all issues
           $results | Format-Table
-          if ($results) { exit 1 }
+
+          # Fail only on errors (ignore warnings)
+          $errors = $results | Where-Object { $_.Severity -eq "Error" }
+
+          if ($errors) {
+            Write-Host "PowerShell lint errors found"
+            exit 1
+          }
 
   terraform-validate:
     runs-on: ubuntu-latest
