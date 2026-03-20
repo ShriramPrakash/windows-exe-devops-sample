@@ -1,0 +1,38 @@
+name: Terraform QA Apply
+
+on:
+  workflow_dispatch:
+
+jobs:
+  terraform-qa:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ap-south-1
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Terraform Init
+        working-directory: terraform/environments/qa
+        run: terraform init
+
+      - name: Terraform Validate
+        working-directory: terraform/environments/qa
+        run: terraform validate
+
+      - name: Terraform Plan
+        working-directory: terraform/environments/qa
+        run: terraform plan -out=tfplan
+
+      - name: Terraform Apply
+        working-directory: terraform/environments/qa
+        run: terraform apply -auto-approve tfplan
