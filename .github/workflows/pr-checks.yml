@@ -32,10 +32,20 @@ jobs:
       - name: Run PSScriptAnalyzer
         shell: powershell
         run: |
-          $results = Invoke-ScriptAnalyzer -Path "app","scripts" -Recurse
-          
+          $results = @()
+
+          if (Test-Path "app") {
+            $results += Invoke-ScriptAnalyzer -Path "app" -Recurse
+          }
+
+          if (Test-Path "scripts") {
+            $results += Invoke-ScriptAnalyzer -Path "scripts" -Recurse
+          }
+
           # Show all issues
-          $results | Format-Table
+          if ($results) {
+            $results | Format-Table
+          }
 
           # Fail only on errors (ignore warnings)
           $errors = $results | Where-Object { $_.Severity -eq "Error" }
@@ -81,5 +91,3 @@ jobs:
       - name: Terraform Validate Prod
         working-directory: terraform/environments/prod
         run: terraform validate
-
-  
